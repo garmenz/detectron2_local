@@ -21,7 +21,6 @@ import os
 from collections import OrderedDict
 import torch
 
-import detectron2.data.transforms as T
 import detectron2.utils.comm as comm
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
@@ -33,32 +32,17 @@ from detectron2.evaluation import (
     COCOEvaluator,
     COCOPanopticEvaluator,
     DatasetEvaluators,
-    # LVISEvaluator,
-    # PascalVOCDetectionEvaluator,
-    # SemSegEvaluator,
-    # verify_results,
+    LVISEvaluator,
+    PascalVOCDetectionEvaluator,
+    SemSegEvaluator,
+    verify_results,
 )
-from detectron2.projects.deeplab import build_lr_scheduler
-from detectron2.projects.panoptic_deeplab import (
-    PanopticDeeplabDatasetMapper,
-    add_panoptic_deeplab_config,
-)
-from detectron2.solver import get_default_optimizer_params
-from detectron2.solver.build import maybe_add_gradient_clipping
 from detectron2.modeling import GeneralizedRCNNWithTTA
-
-def build_sem_seg_train_aug(cfg):
-    augs = [
-        T.ResizeShortestEdge(
-            cfg.INPUT.MIN_SIZE_TRAIN, cfg.INPUT.MAX_SIZE_TRAIN, cfg.INPUT.MIN_SIZE_TRAIN_SAMPLING
-        )
-    ]
-    if cfg.INPUT.CROP.ENABLED:
-        augs.append(T.RandomCrop(cfg.INPUT.CROP.TYPE, cfg.INPUT.CROP.SIZE))
-    augs.append(T.RandomFlip())
-    return augs
-
-
+from detectron2.data import DatasetCatalog
+from collections import namedtuple
+# customized dataset register
+from detectron2.data.datasets.synscapes_panoptic import register_synscapes_panoptic_separated
+from detectron2.data.datasets.builtin_meta import CITYSCAPES_CATEGORIES
 
 
 class Trainer(DefaultTrainer):
@@ -77,8 +61,6 @@ class Trainer(DefaultTrainer):
         For your own dataset, you can simply create an evaluator manually in your
         script and do not have to worry about the hacky if-else logic here.
         """
-        if cfg.MODEL.PANOPTIC_DEEPLAB.BENCHMARK_NETWORK_SPEED:
-            return None
         if output_folder is None:
             output_folder = os.path.join(cfg.OUTPUT_DIR, "inference")
         evaluator_list = []
@@ -91,6 +73,15 @@ class Trainer(DefaultTrainer):
                     output_dir=output_folder,
                 )
             )
+        if evaluator_type in ["coco", "coco_panoptic_seg"]:
+            evaluator_list.append(COCOEvaluator(dataset_name, output_dir=output_folder))
+        if evaluator_type == "coco_panoptic_seg":
+            evaluator_list.append(COCOPanopticEvaluator(dataset_name, output_folder))
+        if evaluator_type == "cityscapes_instance":
+            assert (
+                torch.cuda.device_count() >= comm.get_rank()
+            ), "CityscapesEvaluator currently do not work with multiple machines."
+            return CityscapesInstanceEvaluator(dataset_name)
         if evaluator_type in ["cityscapes_panoptic_seg", "coco_panoptic_seg"]:
             evaluator_list.append(COCOPanopticEvaluator(dataset_name, output_folder))
         if evaluator_type == "cityscapes_panoptic_seg":
@@ -99,18 +90,15 @@ class Trainer(DefaultTrainer):
             ), "CityscapesEvaluator currently do not work with multiple machines."
             evaluator_list.append(CityscapesSemSegEvaluator(dataset_name))
             evaluator_list.append(CityscapesInstanceEvaluator(dataset_name))
-        if evaluator_type == "coco_panoptic_seg":
-            # `thing_classes` in COCO panoptic metadata includes both thing and
-            # stuff classes for visualization. COCOEvaluator requires metadata
-            # which only contains thing classes, thus we map the name of
-            # panoptic datasets to their corresponding instance datasets.
-            dataset_name_mapper = {
-                "coco_2017_val_panoptic": "coco_2017_val",
-                "coco_2017_val_100_panoptic": "coco_2017_val_100",
-            }
-            evaluator_list.append(
-                COCOEvaluator(dataset_name_mapper[dataset_name], output_dir=output_folder)
-            )
+        if evaluator_type == "cityscapes_sem_seg":
+            assert (
+                torch.cuda.device_count() >= comm.get_rank()
+            ), "CityscapesEvaluator currently do not work with multiple machines."
+            return CityscapesSemSegEvaluator(dataset_name)
+        elif evaluator_type == "pascal_voc":
+            return PascalVOCDetectionEvaluator(dataset_name)
+        elif evaluator_type == "lvis":
+            return LVISEvaluator(dataset_name, output_dir=output_folder)
         if len(evaluator_list) == 0:
             raise NotImplementedError(
                 "no Evaluator for the dataset {} with the type {}".format(
@@ -120,69 +108,6 @@ class Trainer(DefaultTrainer):
         elif len(evaluator_list) == 1:
             return evaluator_list[0]
         return DatasetEvaluators(evaluator_list)
-        # if evaluator_type in ["coco", "coco_panoptic_seg"]:
-        #     evaluator_list.append(COCOEvaluator(dataset_name, output_dir=output_folder))
-        # if evaluator_type == "coco_panoptic_seg":
-        #     evaluator_list.append(COCOPanopticEvaluator(dataset_name, output_folder))
-        # if evaluator_type == "cityscapes_instance":
-        #     assert (
-        #         torch.cuda.device_count() >= comm.get_rank()
-        #     ), "CityscapesEvaluator currently do not work with multiple machines."
-        #     return CityscapesInstanceEvaluator(dataset_name)
-        # if evaluator_type == "cityscapes_sem_seg":
-        #     assert (
-        #         torch.cuda.device_count() >= comm.get_rank()
-        #     ), "CityscapesEvaluator currently do not work with multiple machines."
-        #     return CityscapesSemSegEvaluator(dataset_name)
-        # elif evaluator_type == "pascal_voc":
-        #     return PascalVOCDetectionEvaluator(dataset_name)
-        # elif evaluator_type == "lvis":
-        #     return LVISEvaluator(dataset_name, output_dir=output_folder)
-        # if len(evaluator_list) == 0:
-        #     raise NotImplementedError(
-        #         "no Evaluator for the dataset {} with the type {}".format(
-        #             dataset_name, evaluator_type
-        #         )
-        #     )
-        # elif len(evaluator_list) == 1:
-        #     return evaluator_list[0]
-        # return DatasetEvaluators(evaluator_list)
-    @classmethod
-    def build_train_loader(cls, cfg):
-        mapper = PanopticDeeplabDatasetMapper(cfg, augmentations=build_sem_seg_train_aug(cfg))
-        return build_detection_train_loader(cfg, mapper=mapper)
-
-    @classmethod
-    def build_lr_scheduler(cls, cfg, optimizer):
-        """
-        It now calls :func:`detectron2.solver.build_lr_scheduler`.
-        Overwrite it if you'd like a different scheduler.
-        """
-        return build_lr_scheduler(cfg, optimizer)
-
-    @classmethod
-    def build_optimizer(cls, cfg, model):
-        """
-        Build an optimizer from config.
-        """
-        params = get_default_optimizer_params(
-            model,
-            weight_decay=cfg.SOLVER.WEIGHT_DECAY,
-            weight_decay_norm=cfg.SOLVER.WEIGHT_DECAY_NORM,
-        )
-
-        optimizer_type = cfg.SOLVER.OPTIMIZER
-        if optimizer_type == "SGD":
-            return maybe_add_gradient_clipping(cfg, torch.optim.SGD)(
-                params,
-                cfg.SOLVER.BASE_LR,
-                momentum=cfg.SOLVER.MOMENTUM,
-                nesterov=cfg.SOLVER.NESTEROV,
-            )
-        elif optimizer_type == "ADAM":
-            return maybe_add_gradient_clipping(cfg, torch.optim.Adam)(params, cfg.SOLVER.BASE_LR)
-        else:
-            raise NotImplementedError(f"no optimizer type {optimizer_type}")
 
 
     @classmethod
@@ -210,12 +135,48 @@ def setup(args):
     cfg = get_cfg()
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
+    cfg.DATASETS.TRAIN = ("cityscapes_train_separated",)
+    cfg.DATASETS.TEST = ("cityscapes_val_separated",)
     cfg.freeze()
     default_setup(cfg, args)
     return cfg
 
 
 def main(args):
+
+
+    # thing classes
+    thing_classes = MetadataCatalog.get('cityscapes_fine_panoptic_val').thing_dataset_id_to_contiguous_id.keys()
+    # stuff classes
+    stuff_classes = MetadataCatalog.get('cityscapes_fine_panoptic_val').stuff_dataset_id_to_contiguous_id.keys()
+
+   
+
+    meta = {}
+    #meta['evaluator_type']="cityscapes_panoptic_seg"
+    meta['thing_classes'] = [i['name'] for i in CITYSCAPES_CATEGORIES if i['id'] in thing_classes]
+    meta['thing_colors'] = [i['color'] for i in CITYSCAPES_CATEGORIES if i['id'] in thing_classes]
+    meta['stuff_classes'] = []
+    meta['stuff_classes'].append('things')
+    meta['stuff_classes'].extend([i['name'] for i in CITYSCAPES_CATEGORIES if i['id'] in stuff_classes])
+    meta['stuff_colors'] = []
+    meta['stuff_colors'].append((250, 250, 250))
+    meta['stuff_colors'].extend([i['color'] for i in CITYSCAPES_CATEGORIES if i['id'] in stuff_classes])
+    thing_id_map = dict(zip(thing_classes, list(range(8))))
+    meta['thing_dataset_id_to_contiguous_id'] = thing_id_map
+    stuff_plus_one = []
+    stuff_plus_one.append(0)
+    stuff_plus_one.extend(stuff_classes)
+    stuff_id_map = dict(zip(stuff_plus_one, list(range(12))))
+    meta['stuff_dataset_id_to_contiguous_id'] = stuff_id_map
+
+    register_synscapes_panoptic_separated(name='cityscapes_train', metadata=meta, image_root='/srip21-data/models/detectron2/datasets/cityscapes/train_images/', panoptic_root='/srip21-data/models/detectron2/datasets/cityscapes/gtFine/cityscapes_panoptic_train/', panoptic_json='/srip21-data/models/detectron2/datasets/cityscapes/gtFine/cityscapes_panoptic_train.json',sem_seg_root='/srip21-data/models/detectron2/datasets/cityscapes/panoptic_stuff_train/', instances_json='/srip21-data/models/detectron2/datasets/cityscapes/cityscapes_instances_train2.json')
+ 
+    #register_synscapes_panoptic_separated(name='cityscapes_train', metadata=meta, image_root='/workspace/train_images/', panoptic_root='/srip21-data/models/detectron2/datasets/cityscapes/gtFine/cityscapes_panoptic_train/', panoptic_json='/srip21-data/models/detectron2/datasets/cityscapes/gtFine/cityscapes_panoptic_train.json',sem_seg_root='/workspace/train_sem_seg/', instances_json='/srip21-data/models/detectron2/datasets/cityscapes/instances_train1.json')
+    register_synscapes_panoptic_separated(name='cityscapes_val', metadata=meta, image_root='/srip21-data/models/detectron2/datasets/cityscapes/val_images/', panoptic_root='/srip21-data/models/detectron2/datasets/cityscapes/gtFine/cityscapes_panoptic_val/', panoptic_json='/srip21-data/models/detectron2/datasets/cityscapes/gtFine/modified_cityscapes_panoptic_val.json', sem_seg_root='/srip21-data/models/detectron2/datasets/cityscapes/panoptic_stuff_val/' ,instances_json='/srip21-data/models/detectron2/datasets/cityscapes/cityscapes_instances_val2.json') 
+    # small test case
+#     register_synscapes_panoptic_separated(name='cityscapes_val', metadata=meta, image_root='/srip21-data/models/detectron2/datasets/cityscapes/simple_test/image', panoptic_root='/srip21-data/models/detectron2/datasets/cityscapes/simple_test/panoptic', panoptic_json='/srip21-data/models/detectron2/datasets/cityscapes/simple_test/panoptic.json', sem_seg_root='/srip21-data/models/detectron2/datasets/cityscapes/simple_test/sem_seg', instances_json='/srip21-data/models/detectron2/datasets/cityscapes/simple_test/instances.json')
+
     cfg = setup(args)
 
     if args.eval_only:
@@ -235,10 +196,6 @@ def main(args):
     consider writing your own training loop (see plain_train_net.py) or
     subclassing the trainer.
     """
-    # adjust learning rate based on number of gpus
-    bs = args.num_gpus*2
-    cfg.SOLVER.BASE_LR=0.02*bs/16
-
     trainer = Trainer(cfg)
     trainer.resume_or_load(resume=args.resume)
     if cfg.TEST.AUG.ENABLED:
@@ -249,6 +206,7 @@ def main(args):
 
 
 if __name__ == "__main__":
+    
     args = default_argument_parser().parse_args()
     print("Command Line Args:", args)
     launch(
