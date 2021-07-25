@@ -21,6 +21,8 @@ from .dataset_mapper import DatasetMapper
 from .detection_utils import check_metadata_consistency
 from .samplers import InferenceSampler, RepeatFactorTrainingSampler, TrainingSampler
 
+import pdb
+
 """
 This file contains the default logic to build a dataloader for training or testing.
 """
@@ -374,6 +376,7 @@ def build_detection_train_loader(
             ``total_batch_size / num_workers``, where ``mapped_element`` is produced
             by the ``mapper``.
     """
+    # pdb.set_trace()
     if isinstance(dataset, list):
         dataset = DatasetFromList(dataset, copy=False)
     if mapper is not None:

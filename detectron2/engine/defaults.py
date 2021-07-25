@@ -491,6 +491,8 @@ class DefaultTrainer(TrainerBase):
             return self._last_eval_results
 
     def run_step(self):
+        logger = logging.getLogger(__name__)
+
         self._trainer.iter = self.iter
         self._trainer.run_step()
 

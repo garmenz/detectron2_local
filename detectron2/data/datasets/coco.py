@@ -132,14 +132,14 @@ Category ids in annotations are not in [1, #categories]! We'll apply a mapping f
             f"{total_num_valid_anns} of them match to images in the file."
         )
 
-    if "minival" not in json_file:
+    #if "minival" not in json_file:
         # The popular valminusminival & minival annotations for COCO2014 contain this bug.
         # However the ratio of buggy annotations there is tiny and does not affect accuracy.
         # Therefore we explicitly white-list them.
-        ann_ids = [ann["id"] for anns_per_image in anns for ann in anns_per_image]
-        assert len(set(ann_ids)) == len(ann_ids), "Annotation ids in '{}' are not unique!".format(
-            json_file
-        )
+    #    ann_ids = [ann["id"] for anns_per_image in anns for ann in anns_per_image]
+    #    assert len(set(ann_ids)) == len(ann_ids), "Annotation ids in '{}' are not unique!".format(
+    #        json_file
+    #    )
 
     imgs_anns = list(zip(imgs, anns))
     logger.info("Loaded {} images in COCO format from {}".format(len(imgs_anns), json_file))
@@ -222,7 +222,7 @@ Category ids in annotations are not in [1, #categories]! We'll apply a mapping f
     return dataset_dicts
 
 
-def load_sem_seg(gt_root, image_root, gt_ext="png", image_ext="jpg"):
+def load_sem_seg(gt_root, image_root, gt_ext="png", image_ext="png"):
     """
     Load semantic segmentation datasets. All files under "gt_root" with "gt_ext" extension are
     treated as ground truth annotations and all files under "image_root" with "image_ext" extension
