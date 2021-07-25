@@ -170,7 +170,7 @@ class DatasetMapper:
                     obj, transforms, image_shape, keypoint_hflip_indices=self.keypoint_hflip_indices
                 )
                 for obj in dataset_dict.pop("annotations")
-                # if obj.get("iscrowd", 0) == 0
+                if obj.get("iscrowd", 0) == 0
             ]
             instances = utils.annotations_to_instances(
                 annos, image_shape, mask_format=self.instance_mask_format
